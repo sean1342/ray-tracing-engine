@@ -1,81 +1,128 @@
+from PIL import Image
+from functools import reduce
 import numpy as np
-import matplotlib.pyplot as plt
+import time
+import numbers
 
-# Define constants
-WIDTH = 500
-HEIGHT = 500
-FOV = np.pi / 3
-BACKGROUND_COLOR = np.array([0, 0, 0])
+def extract(cond, x):
+    if isinstance(x, numbers.Number):
+        return x
+    else:
+        return np.extract(cond, x)
 
-# Define camera position and viewing direction
-camera_pos = np.array([0, 0, -5])
-pixel_size = 2 * np.tan(FOV/2) / WIDTH
-image = np.zeros((HEIGHT, WIDTH, 3))
+class vec3():
+    def __init__(self, x, y, z):
+        (self.x, self.y, self.z) = (x, y, z)
+    def __mul__(self, other):
+        return vec3(self.x * other, self.y * other, self.z * other)
+    def __add__(self, other):
+        return vec3(self.x + other.x, self.y + other.y, self.z + other.z)
+    def __sub__(self, other):
+        return vec3(self.x - other.x, self.y - other.y, self.z - other.z)
+    def dot(self, other):
+        return (self.x * other.x) + (self.y * other.y) + (self.z * other.z)
+    def __abs__(self):
+        return self.dot(self)
+    def norm(self):
+        mag = np.sqrt(abs(self))
+        return self * (1.0 / np.where(mag == 0, 1, mag))
+    def components(self):
+        return (self.x, self.y, self.z)
+    def extract(self, cond):
+        return vec3(extract(cond, self.x),
+                    extract(cond, self.y),
+                    extract(cond, self.z))
+    def place(self, cond):
+        r = vec3(np.zeros(cond.shape), np.zeros(cond.shape), np.zeros(cond.shape))
+        np.place(r.x, cond, self.x)
+        np.place(r.y, cond, self.y)
+        np.place(r.z, cond, self.z)
+        return r
+rgb = vec3
 
-# Define properties of spheres in the scene
-spheres = [
-    (np.array([0, 0, 0]), 1, np.array([1, 0, 0])),
-    (np.array([1, 1, 1]), 0.5, np.array([0, 1, 0]))
+(w, h) = (400, 300)
+L = vec3(5, 5, -10)
+E = vec3(0, 0.35, -1)
+FARAWAY = 1.0e39
+
+def raytrace(O, D, scene, bounce = 0):
+    distances = [s.intersect(O, D) for s in scene]
+    nearest = reduce(np.minimum, distances)
+    color = rgb(0, 0, 0)
+    for (s, d) in zip(scene, distances):
+        hit = (nearest != FARAWAY) & (d == nearest)
+        if np.any(hit):
+            dc = extract(hit, d)
+            Oc = O.extract(hit)
+            Dc = D.extract(hit)
+            cc = s.light(Oc, Dc, dc, scene, bounce)
+            color += cc.place(hit)
+    return color
+
+class Sphere:
+    def __init__(self, center, r, diffuse, mirror = 0.5):
+        self.c = center
+        self.r = r
+        self.diffuse = diffuse
+        self.mirror = mirror
+
+    def intersect(self, O, D):
+        b = 2 * D.dot(O - self.c)
+        c = abs(self.c) + abs(O) - 2 * self.c.dot(O) - (self.r * self.r)
+        disc = (b ** 2) - (4 * c)
+        sq = np.sqrt(np.maximum(0, disc))
+        h0 = (-b - sq) / 2
+        h1 = (-b + sq) / 2
+        h = np.where((h0 > 0) & (h0 < h1), h0, h1)
+        pred = (disc > 0) & (h > 0)
+        return np.where(pred, h, FARAWAY)
+
+    def diffusecolor(self, M):
+        return self.diffuse
+
+    def light(self, O, D, d, scene, bounce):
+        M = (O + D * d)
+        N = (M - self.c) * (1. / self.r)
+        toL = (L - M).norm()
+        toO = (E - M).norm()
+        nudged = M + N * .0001
+
+        light_distances = [s.intersect(nudged, toL) for s in scene]
+        light_nearest = reduce(np.minimum, light_distances)
+        seelight = light_distances[scene.index(self)] == light_nearest
+
+        color = rgb(0.05, 0.05, 0.05)
+
+        lv = np.maximum(N.dot(toL), 0)
+        color += self.diffusecolor(M) * lv * seelight
+
+        if bounce < 2:
+            rayD = (D - N * 2 * D.dot(N)).norm()
+            color += raytrace(nudged, rayD, scene, bounce + 1) * self.mirror
+
+        phong = N.dot((toL + toO).norm())
+        color += rgb(1, 1, 1) * np.power(np.clip(phong, 0, 1), 50) * seelight
+        return color
+
+class CheckeredSphere(Sphere):
+    def diffusecolor(self, M):
+        checker = ((M.x * 2).astype(int) % 2) == ((M.z * 2).astype(int) % 2)
+        return self.diffuse * checker
+
+scene = [
+    Sphere(vec3(1, 0.1, 1), .6, rgb(0, 0, 1)),
+    Sphere(vec3(-1, 0.1, 1), .6, rgb(.5, .2, .5)),
+    CheckeredSphere(vec3(0,-99999.5, 0), 99999, rgb(.75, .75, .75), 0.25),
 ]
 
-# Define function to compute color of a sphere based on its properties
-def compute_color(color, normal):
-    light_dir = np.array([1, 1, -1])
-    light_dir = light_dir / np.linalg.norm(light_dir)
-    ambient = 0.2
-    diffuse = 1.0 - ambient
-    intensity = ambient + diffuse * np.dot(light_dir, normal)
-    return intensity * color
+r = float(w) / h
+S = (-1, 1 / r + .25, 1, -1 / r + .25)
+x = np.tile(np.linspace(S[0], S[2], w), h)
+y = np.repeat(np.linspace(S[1], S[3], h), w)
 
-# Define function to trace a ray and compute its color
-def trace_ray(origin, direction):
-    global spheres
-    min_distance = float('inf')
-    hit_sphere = None
-    for sphere in spheres:
-        center, radius, color = sphere
-        oc = origin - center
-        a = np.dot(direction, direction)
-        b = 2 * np.dot(oc, direction)
-        c = np.dot(oc, oc) - radius**2
-        discriminant = b**2 - 4*a*c
-        if discriminant >= 0:
-            t1 = (-b - np.sqrt(discriminant)) / (2*a)
-            t2 = (-b + np.sqrt(discriminant)) / (2*a)
-            if t1 > 0 and t1 < min_distance:
-                min_distance = t1
-                hit_sphere = sphere
-            if t2 > 0 and t2 < min_distance:
-                min_distance = t2
-                hit_sphere = sphere
-    if hit_sphere is not None:
-        center, radius, color = hit_sphere
-        intersection_point = origin + min_distance * direction
-        normal = (intersection_point - center) / radius
-        color = compute_color(color, normal)
-        return color
-    else:
-        return BACKGROUND_COLOR
+t0 = time.time()
+Q = vec3(x, y, 0)
+color = raytrace(E, (Q - E).norm(), scene)
 
-# Define function to render the image
-def render_image():
-    global camera_pos, image
-    for y in range(HEIGHT):
-        for x in range(WIDTH):
-            # Compute viewing ray direction
-            direction = np.array([
-                (x - WIDTH/2) * pixel_size,
-                -(y - HEIGHT/2) * pixel_size,
-                1
-            ])
-            direction = direction / np.linalg.norm(direction)
-            # Trace the ray and compute its color
-            color = trace_ray(camera_pos, direction)
-            # Set the pixel color in the image
-            image[y, x] = color
-    # Display the image
-    plt.imshow(image)
-    plt.show()
-
-# Call the render_image function to generate the image
-render_image()
+rgb = [Image.fromarray((255 * np.clip(c, 0, 1).reshape((h, w))).astype(np.uint8), "L") for c in color.components()]
+Image.merge("RGB", rgb).save("rt3.png")
