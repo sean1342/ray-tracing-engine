@@ -40,7 +40,7 @@ class vec3():
         return r
 rgb = vec3
 
-(w, h) = (2160, 2840)
+(w, h) = (5680, 4320)
 L = vec3(5, 5, -10)
 E = vec3(0, 0.35, -1)
 FARAWAY = 1.0e39
@@ -110,8 +110,7 @@ class CheckeredSphere(Sphere):
         return self.diffuse * checker
 
 scene = [
-    Sphere(vec3(1, 0.1, 1), .6, rgb(0, 0, 1)),
-    Sphere(vec3(-1, 0.1, 1), .6, rgb(.5, .2, .5)),
+    Sphere(vec3(0, 0.1, 1), 0.6, rgb(1, 0.5, 1)),
     CheckeredSphere(vec3(0,-99999.5, 0), 99999, rgb(.75, .75, .75), 0.25),
 ]
 
