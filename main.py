@@ -40,7 +40,7 @@ class vec3():
         return r
 rgb = vec3
 
-(w, h) = (400, 300)
+(w, h) = (2160, 2840)
 L = vec3(5, 5, -10)
 E = vec3(0, 0.35, -1)
 FARAWAY = 1.0e39
